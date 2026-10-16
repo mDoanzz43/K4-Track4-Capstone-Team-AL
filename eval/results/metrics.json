@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-10-16T10:04:40.622873+00:00",
+  "commit": "6403348799f067ebb9e3adda61dc55c68911c396",
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "opencv": "5.0.0",
+    "numpy": "2.4.6"
+  },
+  "dataset": {
+    "type": "synthetic",
+    "contains_personal_data": false
+  },
+  "vision_cases": [
+    {
+      "case_id": "canvas_I",
+      "status": "pass",
+      "coverage": 1.0,
+      "latency_ms": 26.88,
+      "num_strokes": 1,
+      "num_points": 2
+    },
+    {
+      "case_id": "canvas_L",
+      "status": "pass",
+      "coverage": 0.99946,
+      "latency_ms": 42.93,
+      "num_strokes": 1,
+      "num_points": 5
+    },
+    {
+      "case_id": "canvas_O",
+      "status": "pass",
+      "coverage": 1.0,
+      "latency_ms": 49.04,
+      "num_strokes": 1,
+      "num_points": 30
+    },
+    {
+      "case_id": "canvas_T",
+      "status": "pass",
+      "coverage": 1.0,
+      "latency_ms": 46.41,
+      "num_strokes": 2,
+      "num_points": 7
+    },
+    {
+      "case_id": "canvas_A",
+      "status": "pass",
+      "coverage": 1.0,
+      "latency_ms": 56.81,
+      "num_strokes": 2,
+      "num_points": 21
+    },
+    {
+      "case_id": "canvas_X",
+      "status": "pass",
+      "coverage": 1.0,
+      "latency_ms": 65.83,
+      "num_strokes": 3,
+      "num_points": 25
+    },
+    {
+      "case_id": "canvas_8",
+      "status": "pass",
+      "coverage": 1.0,
+      "latency_ms": 44.5,
+      "num_strokes": 1,
+      "num_points": 38
+    },
+    {
+      "case_id": "canvas_B",
+      "status": "pass",
+      "coverage": 1.0,
+      "latency_ms": 52.75,
+      "num_strokes": 1,
+      "num_points": 34
+    },
+    {
+      "case_id": "canvas_K",
+      "status": "pass",
+      "coverage": 1.0,
+      "latency_ms": 57.52,
+      "num_strokes": 3,
+      "num_points": 20
+    }
+  ],
+  "robot_cases": [
+    {
+      "case_id": "line",
+      "stopped": false,
+      "sim_time": 5.85,
+      "wall_time": 3.81,
+      "tracking_rms_mm": 0.416,
+      "tracking_max_mm": 0.418,
+      "ink_polylines": 1,
+      "ink_points": 338,
+      "planned_duration_s": 5.846
+    },
+    {
+      "case_id": "corner",
+      "stopped": false,
+      "sim_time": 6.81,
+      "wall_time": 4.8,
+      "tracking_rms_mm": 0.413,
+      "tracking_max_mm": 0.43,
+      "ink_polylines": 1,
+      "ink_points": 578,
+      "planned_duration_s": 6.812
+    },
+    {
+      "case_id": "two_strokes",
+      "stopped": false,
+      "sim_time": 10.27,
+      "wall_time": 6.99,
+      "tracking_rms_mm": 0.417,
+      "tracking_max_mm": 0.438,
+      "ink_polylines": 2,
+      "ink_points": 820,
+      "planned_duration_s": 10.271
+    }
+  ],
+  "known_failures": [
+    {
+      "case_id": "F01_low_contrast_photo",
+      "reproduced": true,
+      "expected": "extract the visible letter A",
+      "actual": "No ink found in the image",
+      "cause": "ink is less than about 12% darker than the local paper and is rejected as noise",
+      "mitigation": "increase lighting/contrast, use darker ink, or draw with canvas mode",
+      "evidence": "results/failed_cases/F01_low_contrast_input.png"
+    },
+    {
+      "case_id": "V01_blank_validation",
+      "reproduced": true,
+      "expected": "reject blank input",
+      "actual": "No ink found in the image",
+      "cause": "input validation; this is not a system failure",
+      "mitigation": "ask the user to provide at least one visible stroke",
+      "evidence": "results/failed_cases/V01_blank_expected_rejection.png"
+    }
+  ],
+  "summary": {
+    "vision_passed": 9,
+    "vision_total": 9,
+    "vision_mean_coverage": 0.99994,
+    "vision_min_coverage": 0.99946,
+    "vision_mean_latency_ms": 49.19,
+    "robot_mean_rms_mm": 0.415,
+    "robot_worst_max_mm": 0.438,
+    "known_failures_reproduced": 1,
+    "validation_cases_passed": 1
+  }
+}

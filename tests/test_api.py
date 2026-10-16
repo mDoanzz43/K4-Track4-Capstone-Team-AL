@@ -40,7 +40,10 @@ def test_websocket_draw_session():
     with client.websocket_connect("/ws/draw") as ws:
         assert ws.receive_json()["type"] == "ready"
         assert ws.receive_bytes()[:2] == b"\xff\xd8"  # idle JPEG frame
-        ws.send_json({"type": "start", "strokes": [[[0.3, 0.3], [0.7, 0.3]]], "speed": 8, "camera": "top"})
+        # A slower, longer stroke guarantees enough scheduled render intervals
+        # to test streaming; the old short 8x job legitimately produced exactly
+        # three frames on fast machines and made the assertion timing-dependent.
+        ws.send_json({"type": "start", "strokes": [[[0.15, 0.3], [0.85, 0.3]]], "speed": 4, "camera": "top"})
         started = ws.receive_json()
         assert started["type"] == "started"
         frames, inked, done = 0, 0, None

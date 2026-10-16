@@ -1,5 +1,7 @@
 # K4-Track4-Capstone-Team-AL — Robot Vẽ Chữ
 
+> Số liệu và minh chứng demo: xem trong eval/
+
 OpenCV → quỹ đạo → cánh tay KUKA iiwa vẽ lại ký tự trong PyBullet.
 
 Web app: người dùng **vẽ ký tự trên canvas** hoặc **viết trên không trung bằng tay trước webcam**.
