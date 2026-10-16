@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Robot Vẽ Chữ</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Robot Vẽ Chữ</h1>
+    <p class="sub">Vẽ ký tự bằng chuột hoặc bằng tay trước webcam → OpenCV trích nét → cánh tay KUKA iiwa vẽ lại trong PyBullet</p>
+    <span id="conn" class="pill">Đang kết nối…</span>
+  </header>
+
+  <main>
+    <!-- ============ 1. INPUT ============ -->
+    <section class="card" id="input-card">
+      <h2><span class="num">1</span> Nhập ký tự</h2>
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="draw" role="tab">✏️ Vẽ trên canvas</button>
+        <button class="tab" data-tab="cam" role="tab">🖐️ Vẽ bằng tay (webcam)</button>
+      </div>
+
+      <div class="tab-panel" id="tab-draw">
+        <canvas id="pad" width="400" height="400" aria-label="Vùng vẽ ký tự"></canvas>
+        <div class="row">
+          <label>Nét bút <input type="range" id="brush" min="6" max="40" value="18" /></label>
+          <button id="undo" class="ghost">↶ Hoàn tác</button>
+          <button id="clear" class="ghost">Xoá</button>
+        </div>
+      </div>
+
+      <div class="tab-panel hidden" id="tab-cam">
+        <div class="cam-wrap" id="air-wrap">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="air-overlay" width="640" height="480" aria-label="Keypoint bàn tay và nét vẽ"></canvas>
+          <div class="air-status" id="air-status">Webcam đang tắt</div>
+        </div>
+        <div class="row">
+          <button id="cam-start" class="ghost">Bật webcam</button>
+          <button id="air-undo" class="ghost">↶ Hoàn tác</button>
+          <button id="air-clear" class="ghost">Xoá</button>
+          <span class="pen-state" id="pen-state" aria-live="polite">✋ Nhấc bút</span>
+        </div>
+        <p class="hint">Giơ một bàn tay trước webcam. <b>Chụm ngón cái và ngón trỏ</b> để hạ bút, rồi di chuyển để viết;
+          <b>mở ra</b> để nhấc bút. Có thể giữ phím <kbd>Space</kbd> thay cho chụm tay.
+          Keypoint tay được nhận diện ngay trên trình duyệt (MediaPipe Hand Landmarker, CPU).</p>
+      </div>
+
+      <div class="row">
+        <label>Phương pháp
+          <select id="method">
+            <option value="skeleton">Xương nét (skeleton) – vẽ 1 nét</option>
+            <option value="outline">Đường viền (outline)</option>
+          </select>
+        </label>
+        <button id="extract" class="primary">Trích nét →</button>
+      </div>
+    </section>
+
+    <!-- ============ 2. EXTRACTION ============ -->
+    <section class="card" id="extract-card">
+      <h2><span class="num">2</span> Kết quả OpenCV</h2>
+      <div class="debug">
+        <figure><img id="img-binary" alt="" /><figcaption>Nhị phân</figcaption></figure>
+        <figure><img id="img-skeleton" alt="" /><figcaption>Xương / viền</figcaption></figure>
+        <figure><img id="img-strokes" alt="" /><figcaption>Quỹ đạo (màu = thứ tự nét)</figcaption></figure>
+      </div>
+      <p id="extract-info" class="info">Chưa có dữ liệu.</p>
+    </section>
+
+    <!-- ============ 3. ROBOT ============ -->
+    <section class="card wide" id="robot-card">
+      <h2><span class="num">3</span> Robot vẽ (PyBullet)</h2>
+      <div class="robot-grid">
+        <div class="viewer">
+          <img id="sim" alt="Khung hình mô phỏng PyBullet" />
+          <div class="overlay" id="sim-overlay">Đang khởi tạo mô phỏng…</div>
+        </div>
+        <div class="side">
+          <canvas id="trace" width="300" height="300" aria-label="Nét mực thực tế"></canvas>
+          <p class="cap">Mực thực tế từ đầu bút (xanh nhạt = kế hoạch)</p>
+          <div class="controls">
+            <label>Camera
+              <select id="camera">
+                <option value="perspective">Phối cảnh</option>
+                <option value="top">Từ trên</option>
+                <option value="side">Bên hông</option>
+                <option value="front">Chéo phía trước</option>
+              </select>
+            </label>
+            <label>Tốc độ <span id="speed-val">1×</span>
+              <input type="range" id="speed" min="0.5" max="6" step="0.5" value="1.5" />
+            </label>
+            <label class="check"><input type="checkbox" id="shadows" /> Bóng đổ (chậm hơn)</label>
+            <label class="check"><input type="checkbox" id="plan" checked /> Hiện quỹ đạo kế hoạch</label>
+            <div class="row">
+              <button id="draw" class="primary" disabled>▶ Robot vẽ</button>
+              <button id="stop" class="ghost" disabled>■ Dừng</button>
+            </div>
+          </div>
+          <div class="progress"><div id="bar"></div></div>
+          <p id="robot-info" class="info"></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/air.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
