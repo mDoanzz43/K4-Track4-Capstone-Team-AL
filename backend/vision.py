@@ -148,6 +148,17 @@ def isolate_character(bw: np.ndarray, mode: str) -> tuple[np.ndarray, tuple[int,
         cand.append(i)
     if not cand:
         raise NoCharacterFound("No character-like region found")
+    if mode != "canvas":
+        # Small specks at (or within 3% of) the image border are desk / paper-edge
+        # debris, not ink.
+        biggest = max(stats[i][4] for i in cand)
+        mg = max(2, int(0.03 * min(h, w)))
+
+        def small_on_border(i):
+            x, y, cw, ch, area = stats[i]
+            near = x <= mg or y <= mg or x + cw >= w - mg or y + ch >= h - mg
+            return near and area < 0.05 * biggest
+        cand = [i for i in cand if not small_on_border(i)]
 
     if mode in ("canvas", "ink"):
         keep = cand
@@ -684,7 +695,12 @@ def extract_strokes(img: np.ndarray, mode: str = "canvas", method: str = "skelet
     img = _resize_max(img, 1000 if mode == "ink" else 800)
     bw = binarize(img, mode)
     mask, bbox = isolate_character(bw, mode)
-    work = 320 if mode == "ink" else WORK_SIZE  # complex glyphs (Hán tự) need more pixels
+    work = WORK_SIZE
+    if mode == "ink":
+        # Complex glyphs (Hán tự) need more pixels; a page with many characters
+        # needs even more so each character keeps its thin strokes.
+        n_parts = cv2.connectedComponents(mask, connectivity=8)[0] - 1
+        work = int(np.clip(320 * np.sqrt(max(n_parts, 12) / 12), 320, 720))
     crop, _ = crop_and_scale(mask, bbox, work)
     raw, sk = strokes_from_mask(crop, method, spur_len=0.08 * WORK_SIZE)
     return finalize_strokes(raw, binary=crop, skeleton=sk, bbox=bbox, method=method)

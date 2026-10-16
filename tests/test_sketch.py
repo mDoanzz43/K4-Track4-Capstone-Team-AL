@@ -65,3 +65,16 @@ def test_face_detector_model_present_and_no_false_positive():
 def test_blank_image_raises():
     with pytest.raises(NoCharacterFound):
         sketch_strokes(np.full((300, 300, 3), 128, np.uint8))
+
+
+def test_person_mask_rejects_head_only_segmentation(make_portrait, monkeypatch):
+    """If GrabCut keeps only the head (dark clothes on a dark background, seen
+    on the Marie Curie sample), the mask is rejected so the whole frame is drawn."""
+    import backend.sketch as sk
+
+    def head_only(img, mask, rect, bgd, fgd, iters, mode):
+        mask[:] = cv2.GC_BGD
+        cv2.ellipse(mask, (200, 160), (80, 100), 0, 0, 360, cv2.GC_FGD, -1)
+
+    monkeypatch.setattr(sk.cv2, "grabCut", head_only)
+    assert person_mask(make_portrait(), (120, 70, 160, 200)) is None

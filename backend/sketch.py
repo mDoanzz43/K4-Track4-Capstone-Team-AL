@@ -64,7 +64,9 @@ def face_crop_box(shape, face):
 
 
 def person_mask(img: np.ndarray, face) -> np.ndarray:
-    """Foreground (head + shoulders) mask via GrabCut seeded from the face box.
+    """Foreground (head + shoulders) mask via GrabCut seeded from the face box,
+    or None when the segmentation is implausible (e.g. dark clothes on a dark
+    background collapse the person to just the head).
 
     Seeds: a definite-foreground ellipse inside the face, a probable-foreground
     head ellipse and a widening torso trapezoid below it, and definite
@@ -86,6 +88,8 @@ def person_mask(img: np.ndarray, face) -> np.ndarray:
     border[:b, :] = True
     m[border & (m == cv2.GC_PR_BGD)] = cv2.GC_BGD
     cv2.ellipse(m, (int(cx), int(fy + 0.5 * fh)), (int(0.3 * fw), int(0.35 * fh)), 0, 0, 360, cv2.GC_FGD, -1)
+    torso_seed = np.zeros((h, w), np.uint8)
+    cv2.fillPoly(torso_seed, [torso], 1)
     bgd, fgd = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
     cv2.grabCut(img, m, None, bgd, fgd, 4, cv2.GC_INIT_WITH_MASK)
     fg = np.isin(m, (cv2.GC_FGD, cv2.GC_PR_FGD)).astype(np.uint8) * 255
@@ -93,7 +97,7 @@ def person_mask(img: np.ndarray, face) -> np.ndarray:
     fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(fg, connectivity=8)
     if n <= 1:
-        return np.full((h, w), 255, np.uint8)
+        return None
     # Keep every sizeable part (head, torso, arms may be separated by GrabCut).
     areas = stats[:, cv2.CC_STAT_AREA].copy()
     areas[0] = 0
@@ -106,6 +110,11 @@ def person_mask(img: np.ndarray, face) -> np.ndarray:
         x, y, cw, ch, _ = stats[i]
         if x > 0 and y > 0 and x + cw < w and y + ch < h:
             fg[labels == i] = 255
+    # Sanity check: a person has a body. If GrabCut kept almost none of the torso
+    # region (dark clothes on a dark background), fall back to drawing everything.
+    torso_area = int(torso_seed.sum())
+    if torso_area and (fg.astype(bool) & torso_seed.astype(bool)).sum() < 0.3 * torso_area:
+        return None
     return fg
 
 

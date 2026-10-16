@@ -145,3 +145,13 @@ def test_cjk_character_if_font_available():
     res = extract_strokes(cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR), "ink")
     assert 8 <= len(res.strokes) <= 30
     assert _coverage(res) > 0.95
+
+
+def test_ink_mode_ignores_specks_near_the_border():
+    """Regression: a desk-corner speck a few px from the border was drawn."""
+    img = np.full((500, 500, 3), 235, np.uint8)
+    _poly(img, [(150, 150), (350, 350)], 20)
+    _poly(img, [(350, 150), (150, 350)], 20)
+    cv2.circle(img, (492, 490), 5, (30, 30, 30), -1)  # speck near (not on) the corner
+    x, y, w, h = extract_strokes(img, "ink").bbox
+    assert x + w < 380 and y + h < 380
