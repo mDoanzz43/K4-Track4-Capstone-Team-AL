@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from .robot_sim import CAMERAS, DrawingSim
 from .trajectory import TrajectoryConfig, build_trajectory, world_to_unit
+from .sketch import sketch_strokes
 from .vision import NoCharacterFound, decode_image, encode_png_b64, extract_strokes, render_strokes
 
 log = logging.getLogger("robot_draw")
@@ -43,17 +44,25 @@ mimetypes.add_type("text/javascript", ".mjs")
 mimetypes.add_type("application/wasm", ".wasm")
 mimetypes.add_type("application/octet-stream", ".task")
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
-MAX_POINTS = 4000
-MAX_STROKES = 60
+MAX_POINTS = 40000  # sketches / hatching produce hundreds of strokes
+MAX_STROKES = 2000
+MAX_IMAGE_CHARS = 20_000_000  # ~15 MB image as base64
 
 app = FastAPI(title="Robot Character Drawing")
 app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
 
 
 class ExtractRequest(BaseModel):
-    image: str = Field(..., description="data URL or base64 encoded PNG/JPEG")
-    mode: str = Field("canvas", pattern="^(canvas|photo)$")
+    image: str = Field(..., max_length=MAX_IMAGE_CHARS, description="data URL or base64 encoded PNG/JPEG")
+    # canvas: drawing pad / air drawing · photo: one handwritten character in a photo
+    # ink: uploaded text / Hán tự / calligraphy / line art · sketch: portrait or any photo -> pen sketch
+    mode: str = Field("canvas", pattern="^(canvas|photo|ink|sketch)$")
     method: str = Field("skeleton", pattern="^(skeleton|outline)$")
+    # sketch options
+    detail: float = Field(0.5, ge=0.0, le=1.0)
+    hatching: bool = True
+    face_crop: bool = True
+    remove_bg: bool = True
 
 
 @app.get("/")
@@ -74,17 +83,21 @@ def extract(req: ExtractRequest):
         raise HTTPException(400, "Không đọc được ảnh (invalid image)")
     t0 = time.perf_counter()
     try:
-        res = extract_strokes(img, req.mode, req.method)
+        if req.mode == "sketch":
+            res = sketch_strokes(img, req.detail, req.hatching, req.face_crop, req.remove_bg)
+        else:
+            res = extract_strokes(img, req.mode, req.method)
     except NoCharacterFound as e:
-        raise HTTPException(422, f"Không tìm thấy ký tự: {e}")
+        raise HTTPException(422, f"Không tìm thấy nét để vẽ: {e}")
     stats = dict(res.stats, ms=round((time.perf_counter() - t0) * 1000, 1))
+    stats["est_seconds"] = round(build_trajectory(res.strokes, TrajectoryConfig()).duration, 1)
     return {
         "strokes": [[[round(x, 4), round(y, 4)] for x, y in s] for s in res.strokes],
         "stats": stats,
         "images": {
             "binary": encode_png_b64(res.binary),
             "skeleton": encode_png_b64(res.skeleton),
-            "strokes": encode_png_b64(render_strokes(res.strokes, 256)),
+            "strokes": encode_png_b64(render_strokes(res.strokes, 320)),
         },
     }
 
@@ -180,7 +193,7 @@ async def ws_draw(ws: WebSocket):
                 except ValueError as e:
                     await out_q.put({"type": "error", "message": str(e)})
                     continue
-                speed = float(np.clip(float(msg.get("speed", 1.0)), 0.25, 8.0))
+                speed = float(np.clip(float(msg.get("speed", 1.0)), 0.25, 12.0))
                 with sim._lock:
                     sim.shadows = bool(msg.get("shadows", False))
                     sim.set_camera(str(msg.get("camera", sim.camera)))
@@ -207,7 +220,7 @@ async def ws_draw(ws: WebSocket):
                         except ValueError as e:
                             await out_q.put({"type": "error", "message": str(e)})
                     with sim._lock:
-                        sim.ink, sim.plan = [], plan
+                        sim.clear_paper(plan)
                     await out_q.put(await loop.run_in_executor(None, idle_frame))
     except WebSocketDisconnect:
         pass

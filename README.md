@@ -28,7 +28,7 @@ Muốn mở cho máy khác trong mạng LAN: `HOST=0.0.0.0 ./run.sh`.
 Chạy test:
 
 ```bash
-python -m pytest -q tests           # 30 test: vision, trajectory, IK/sim, HTTP + WebSocket, trình duyệt
+python -m pytest -q tests           # 43 test: vision, sketch, trajectory, IK/sim, HTTP + WebSocket, trình duyệt
 ```
 
 Test trình duyệt (`tests/test_e2e_browser.py`) cần Playwright + Chromium (`pip install playwright && playwright install chromium`).
@@ -45,8 +45,13 @@ Nếu không có thì test này tự bỏ qua.
      **Chụm ngón cái và ngón trỏ** để hạ bút, di chuyển tay để viết, **mở ra** để nhấc bút.
      Con trỏ tròn trên video chuyển sang đỏ khi bút đang hạ.
      Nếu chụm tay khó nhận, giữ phím **Space** để hạ bút. Có nút hoàn tác và xoá.
-2. Bấm **Trích nét →**: xem ảnh nhị phân, xương nét và quỹ đạo (màu = thứ tự nét, chấm = điểm bắt đầu).
-3. Bấm **▶ Robot vẽ**: xem robot vẽ; chọn góc camera, tốc độ (0.5×–6×), bật/tắt bóng đổ và quỹ đạo kế hoạch.
+   - *Tải ảnh*: kéo-thả, bấm để chọn file, hoặc dán ảnh (Ctrl+V). Chọn loại ảnh:
+     - **字 Chữ / nét mực**: chữ Hán, thư pháp, chữ viết tay, logo, tranh nét. Mọi nét mực đều được giữ; nền tối chữ sáng cũng được.
+     - **👤 Chân dung / ảnh chụp**: ảnh được chuyển thành tranh phác hoạ (đường nét + nét gạch đổ bóng).
+       Tuỳ chọn: mức chi tiết, cắt theo khuôn mặt, tách người khỏi nền, đổ bóng bằng nét gạch.
+2. Bấm **Trích nét →**: xem ảnh nhị phân, xương nét và quỹ đạo (màu = thứ tự nét, chấm = điểm bắt đầu),
+   kèm thời gian robot vẽ ước tính.
+3. Bấm **▶ Robot vẽ**: xem robot vẽ; chọn góc camera, tốc độ (0.5×–10×), bật/tắt bóng đổ và quỹ đạo kế hoạch.
    Khung bên phải vẽ lại **mực thực tế** lấy từ vị trí đầu bút mô phỏng. Khi xong sẽ hiện sai số bám quỹ đạo.
 
 ## Kiến trúc
@@ -69,6 +74,8 @@ Trình duyệt (HTML/JS thuần)                 Server Python (FastAPI, 1 tiế
 | `backend/vision.py` | Pipeline OpenCV: giải mã ảnh, nhị phân hoá, tách ký tự, làm mảnh, chuyển xương nét thành đồ thị, nối thành nét bút |
 | `backend/trajectory.py` | Ánh xạ nét 2D lên tờ giấy, sinh quỹ đạo đầu bút 240 Hz (hạ/nhấc bút, tốc độ vẽ không đổi) |
 | `backend/robot_sim.py` | Cảnh PyBullet (bàn, giấy, iiwa, bút), IK, điều khiển motor, phát hiện mực, render + chồng mực |
+| `backend/sketch.py` | Ảnh chụp → tranh phác hoạ: nhận diện mặt (YuNet), tách người (GrabCut), đường nét, nét gạch đổ bóng |
+| `backend/models/` | `face_detection_yunet_2023mar.onnx` (230 kB, OpenCV Zoo) cho `cv2.FaceDetectorYN` |
 | `backend/app.py` | FastAPI: REST trích nét, WebSocket stream mô phỏng, phục vụ frontend |
 | `frontend/air.js` | Vẽ bằng tay: webcam + MediaPipe Hand Landmarker, cử chỉ chụm → hạ/nhấc bút, lọc One-Euro, raster hoá nét |
 | `frontend/vendor/mediapipe/` | `@mediapipe/tasks-vision` 0.10.21 (Apache-2.0) + model `hand_landmarker.task`, đóng gói cục bộ |
@@ -89,6 +96,27 @@ Trình duyệt (HTML/JS thuần)                 Server Python (FastAPI, 1 tiế
   Ảnh được lật như gương để người dùng viết tự nhiên.
 - Nét viết trên không trung được vẽ thành ảnh trắng–đen, rồi đi qua **cùng pipeline OpenCV** như canvas.
   Nhờ vậy nét run tay được làm mảnh, làm trơn và đơn giản hoá trước khi đưa cho robot.
+
+**Tải ảnh: chữ Hán / nét mực (`mode: "ink"`)**
+- Dùng chung pipeline xương nét với canvas, nhưng giữ **mọi** thành phần mực (chữ Hán có nhiều bộ tách rời,
+  nhiều chữ một lúc), và làm việc ở độ phân giải cao hơn (320 px thay vì 200 px) để giữ nét nhỏ.
+- Tự nhận cực tính: nếu “mực” theo Otsu chiếm quá nửa ảnh thì ảnh bị đảo màu (chữ trắng trên nền đen).
+
+**Tải ảnh: chân dung / ảnh chụp (`mode: "sketch"`, `backend/sketch.py`)**
+- **Nhận diện khuôn mặt** bằng YuNet (`cv2.FaceDetectorYN`, chạy CPU vài ms) rồi cắt khung đầu–vai quanh mặt lớn nhất.
+  OpenCV 5 đã bỏ Haar cascade nên dùng YuNet.
+- **Tách người khỏi nền** bằng GrabCut, khởi tạo từ hộp mặt: elip mặt là tiền cảnh chắc chắn; đầu và thân hình thang
+  là “có thể tiền cảnh”; mép trái/phải/trên là nền. Nét và đổ bóng chỉ vẽ bên trong người, thêm đường bao dáng người.
+  Nếu không thấy mặt thì vẽ cả ảnh (phù hợp ảnh đồ vật, phong cảnh).
+- **Đường nét**: CLAHE → bilateral filter (giữ cạnh) → adaptive threshold (trung bình cục bộ) cho các đường tối mảnh
+  (mắt, mày, miệng, tóc, nếp áo). Bỏ đốm nhỏ, rồi đi qua cùng pipeline skeleton → đồ thị → nét.
+- **Đổ bóng bằng nét gạch** (hatching): vùng tối nhất 30% của ảnh được gạch 45°, vùng tối nhất 12% gạch chéo thêm −45°.
+  Dùng phân vị của chính ảnh, nên tự thích nghi độ sáng. Nét gạch được sinh bằng cách xoay mặt nạ cho hướng gạch nằm ngang,
+  quét từng hàng lấy các đoạn liên tục, rồi xoay ngược lại. Các hàng xen kẽ đảo chiều để bút đi zig-zag.
+- **Mức chi tiết** (0–1) điều khiển cùng lúc độ phân giải làm việc, ngưỡng đường nét, độ dài nét tối thiểu và khoảng cách gạch.
+- Với ảnh có hàng trăm nét: quỹ đạo **nhấc bút thấp** (6 mm) khi nét kế tiếp ở gần thay vì luôn nhấc 4 cm.
+  Với chân dung mẫu, thời gian vẽ giảm từ 340 s xuống 110 s. Lớp mực khi render được **vẽ tăng dần**
+  (chỉ rasterise điểm mới), nên số nét không làm chậm khung hình.
 
 **Thị giác (OpenCV)**
 - *Canvas / nét vẽ bằng tay*: ngưỡng cố định (nền trắng, nét đen đã biết trước).
@@ -113,7 +141,7 @@ Trình duyệt (HTML/JS thuần)                 Server Python (FastAPI, 1 tiế
 **Quỹ đạo**
 - Ký tự được đặt vừa vào ô 20 × 20 cm trên giấy, đúng chiều đọc khi nhìn từ sau lưng robot.
 - Lúc vẽ, bút đi với tốc độ không đổi 10 cm/s nhờ lấy mẫu lại theo độ dài cung. Lúc nhấc, hạ và di chuyển,
-  vận tốc theo profile cosin (mượt). Bút nhấc cao 4 cm khi chuyển nét.
+  vận tốc theo profile cosin (mượt). Bút nhấc cao tối đa 4 cm khi chuyển nét, thấp dần tới 6 mm nếu nét kế tiếp ở gần.
 
 **Robot & mô phỏng**
 - KUKA iiwa (có sẵn trong `pybullet_data`, không cần tải thêm) gắn trên bàn. Bút là khối hình học đi theo khâu cuối.
@@ -144,6 +172,16 @@ Trình duyệt (HTML/JS thuần)                 Server Python (FastAPI, 1 tiế
     **Chưa thử với webcam và bàn tay thật.**
   - Trình duyệt cần hỗ trợ WebAssembly và WebGL (máy không có GPU vẫn có WebGL phần mềm).
 - Có thể vẽ nhiều ký tự cùng lúc, nhưng cả cụm sẽ bị co lại cho vừa ô 20 × 20 cm, nên chữ dài sẽ nhỏ.
+- **Ảnh chữ (ink)**: ảnh phải chỉ có chữ trên nền tương đối đồng đều. Ảnh chụp có vật khác, bóng tay, đường kẻ vở…
+  sẽ bị vẽ theo. Nét chữ Hán viết bằng bút lông (đậm nhạt, bay đầu) bị làm mảnh thành đường đều,
+  và thứ tự nét không theo quy tắc bút thuận.
+- **Phác hoạ chân dung**: đây là phong cách phác hoạ theo ngưỡng, không phải mô hình học sâu tạo tranh. Kết quả phụ thuộc
+  ánh sáng; mặt thiếu sáng hoặc ngược sáng sẽ bị gạch tối nhiều. GrabCut có thể cắt nhầm khi nền cùng màu với tóc hay áo
+  (khi đó tắt "Tách người khỏi nền"). Chỉ xử lý **một** khuôn mặt (lớn nhất).
+  Đã kiểm thử với một ảnh chân dung thật (ảnh chính thức thuộc phạm vi công cộng) và ảnh tổng hợp.
+- Ảnh nhiều chi tiết có thể cần vài phút mô phỏng. Ở tốc độ 10×, giới hạn thực tế là CPU (IK khoảng 1 ms/bước 240 Hz),
+  nên chân dung mẫu khoảng 110 s mô phỏng mất khoảng 17–40 s thực. Mực mô phỏng dày 2 mm trên tranh 20 cm,
+  nên vùng gạch dày trông đậm hơn bản xem trước.
 - Skeleton tạo méo nhỏ ở các giao điểm của nét rất dày (giao điểm chữ X tách thành 2 điểm, góc nhọn hơi bo).
 - Tiếp xúc bút–giấy là **hình học** (ngưỡng độ cao đầu bút), không mô phỏng lực ép hay ma sát. Bút không có va chạm.
 - TinyRenderer trên CPU tốn khoảng 60 ms/khung ở 480×360. Bật bóng đổ chậm gần gấp đôi, nên ~10–15 fps.

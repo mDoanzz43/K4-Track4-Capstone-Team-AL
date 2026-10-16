@@ -110,6 +110,21 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .info.err { color: var(--err); }
 .info.ok { color: var(--ok); }
 
+.drop {
+  position: relative; display: grid; place-items: center; width: 100%; min-height: 220px;
+  border: 2px dashed var(--line); border-radius: 8px; cursor: pointer; overflow: hidden;
+  color: var(--muted); text-align: center; padding: 12px; background: var(--pad);
+}
+.drop.over, .drop:focus-visible { border-color: var(--accent); outline: none; }
+.drop input { display: none; }
+.drop img { max-width: 100%; max-height: 320px; display: block; }
+.seg { display: flex; gap: 6px; margin-top: 12px; }
+.seg label {
+  flex: 1; justify-content: center; border: 1px solid var(--line); border-radius: 8px; padding: 7px; cursor: pointer;
+}
+.seg label:has(input:checked) { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+
 .debug { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .debug figure { margin: 0; }
 .debug img {

@@ -133,3 +133,36 @@ def test_mediapipe_model_loads_and_runs(page):
     )
     assert ok
     assert not page.errors
+
+
+def _png(tmp_path, name, img):
+    import cv2
+
+    path = tmp_path / name
+    cv2.imwrite(str(path), img)
+    return str(path)
+
+
+def test_upload_ink_and_sketch(page, tmp_path, make_text, make_portrait):
+    page.click("[data-tab=upload]")
+    # 1. text image -> ink mode -> robot draws it
+    page.set_input_files("#file", _png(tmp_path, "glyph.png", 255 - make_text("H")))  # white on black
+    page.wait_for_function("document.querySelector('#extract-info').textContent.includes('Đã tải')")
+    page.click("label:has(input[value=ink])")
+    page.click("#extract")
+    info = _wait_extract(page)
+    assert "ước tính" in info, info
+    page.fill("#speed", "10")
+    page.dispatch_event("#speed", "input")
+    page.click("#draw")
+    page.wait_for_function("document.querySelector('#robot-info').textContent.includes('Hoàn thành')", timeout=90000)
+    # 2. photo -> sketch mode with options
+    page.set_input_files("#file", _png(tmp_path, "portrait.png", make_portrait()))
+    page.wait_for_function("document.querySelector('#extract-info').textContent.includes('Đã tải')")
+    page.click("label:has(input[value=sketch])")
+    assert page.is_visible("#detail") and not page.is_visible("#method")
+    page.fill("#detail", "0.3")
+    page.click("#extract")
+    info = _wait_extract(page)
+    assert "nét gạch" in info, info
+    assert not page.errors

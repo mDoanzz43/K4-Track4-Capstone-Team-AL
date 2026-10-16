@@ -9,17 +9,18 @@
 <body>
   <header>
     <h1>Robot Vẽ Chữ</h1>
-    <p class="sub">Vẽ ký tự bằng chuột hoặc bằng tay trước webcam → OpenCV trích nét → cánh tay KUKA iiwa vẽ lại trong PyBullet</p>
+    <p class="sub">Vẽ bằng chuột, bằng tay trước webcam, hoặc tải ảnh (chữ Hán, chân dung…) → OpenCV trích nét → cánh tay KUKA iiwa vẽ lại trong PyBullet</p>
     <span id="conn" class="pill">Đang kết nối…</span>
   </header>
 
   <main>
     <!-- ============ 1. INPUT ============ -->
     <section class="card" id="input-card">
-      <h2><span class="num">1</span> Nhập ký tự</h2>
+      <h2><span class="num">1</span> Nhập ký tự / hình</h2>
       <div class="tabs" role="tablist">
-        <button class="tab active" data-tab="draw" role="tab">✏️ Vẽ trên canvas</button>
-        <button class="tab" data-tab="cam" role="tab">🖐️ Vẽ bằng tay (webcam)</button>
+        <button class="tab active" data-tab="draw" role="tab">✏️ Canvas</button>
+        <button class="tab" data-tab="cam" role="tab">🖐️ Vẽ bằng tay</button>
+        <button class="tab" data-tab="upload" role="tab">🖼️ Tải ảnh</button>
       </div>
 
       <div class="tab-panel" id="tab-draw">
@@ -48,7 +49,31 @@
           Keypoint tay được nhận diện ngay trên trình duyệt (MediaPipe Hand Landmarker, CPU).</p>
       </div>
 
-      <div class="row">
+      <div class="tab-panel hidden" id="tab-upload">
+        <label class="drop" id="drop" tabindex="0">
+          <input type="file" id="file" accept="image/*" />
+          <img id="upload-preview" alt="" class="hidden" />
+          <span id="drop-hint">Kéo-thả ảnh vào đây, bấm để chọn file, hoặc dán (Ctrl+V)</span>
+        </label>
+        <div class="seg" role="radiogroup" aria-label="Loại ảnh">
+          <label><input type="radio" name="kind" value="ink" checked /> 字 Chữ / nét mực</label>
+          <label><input type="radio" name="kind" value="sketch" /> 👤 Chân dung / ảnh chụp</label>
+        </div>
+        <p class="hint" id="kind-hint-ink">Chữ Hán, thư pháp, chữ viết tay, logo, tranh nét… Mọi nét mực trong ảnh đều được giữ; nền sáng hay tối đều được.</p>
+        <div id="sketch-opts" class="hidden">
+          <div class="row">
+            <label>Mức chi tiết <input type="range" id="detail" min="0" max="1" step="0.1" value="0.5" /></label>
+          </div>
+          <div class="row">
+            <label class="check"><input type="checkbox" id="face-crop" checked /> Cắt theo khuôn mặt</label>
+            <label class="check"><input type="checkbox" id="remove-bg" checked /> Tách người khỏi nền</label>
+            <label class="check"><input type="checkbox" id="hatching" checked /> Đổ bóng bằng nét gạch</label>
+          </div>
+          <p class="hint">Ảnh được chuyển thành tranh phác hoạ bằng bút: đường nét + nét gạch chéo cho vùng tối. Nhiều chi tiết = robot vẽ lâu hơn.</p>
+        </div>
+      </div>
+
+      <div class="row" id="method-row">
         <label>Phương pháp
           <select id="method">
             <option value="skeleton">Xương nét (skeleton) – vẽ 1 nét</option>
@@ -91,7 +116,7 @@
               </select>
             </label>
             <label>Tốc độ <span id="speed-val">1×</span>
-              <input type="range" id="speed" min="0.5" max="6" step="0.5" value="1.5" />
+              <input type="range" id="speed" min="0.5" max="10" step="0.5" value="1.5" />
             </label>
             <label class="check"><input type="checkbox" id="shadows" /> Bóng đổ (chậm hơn)</label>
             <label class="check"><input type="checkbox" id="plan" checked /> Hiện quỹ đạo kế hoạch</label>

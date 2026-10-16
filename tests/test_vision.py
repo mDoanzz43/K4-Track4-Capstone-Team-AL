@@ -113,3 +113,35 @@ def test_photo_keeps_nearby_letters_drops_far_blobs(make_photo):
     x, y, w, h = res.bbox
     assert x + w > 510  # the nearby letter is included
     assert x > 200 and y + h < 400  # the blot is not
+
+
+def test_ink_mode_keeps_all_components_and_detects_polarity():
+    """Uploaded text: a 'Hán-like' glyph made of separate parts must keep every
+    part, and white-on-black input must give the same strokes as black-on-white."""
+    img = np.full((400, 400, 3), 230, np.uint8)
+    _poly(img, [(60, 60), (340, 60)], 16)  # 一
+    _poly(img, [(110, 130), (290, 130)], 16)  # second bar
+    cv2.rectangle(img, (120, 200), (280, 340), (20, 20, 20), 16)  # 口
+    _poly(img, [(40, 380), (60, 360)], 10)  # small dot-like stroke far away
+    a = extract_strokes(img, "ink")
+    x, y, w, h = a.bbox
+    assert x < 45 and y < 60 and x + w > 330 and y + h > 375
+    assert len(a.strokes) >= 4
+    b = extract_strokes(255 - img, "ink")
+    assert b.bbox == a.bbox and len(b.strokes) == len(a.strokes)
+
+
+def test_cjk_character_if_font_available():
+    from pathlib import Path
+
+    font_path = Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc")
+    PIL = pytest.importorskip("PIL")
+    if not font_path.exists():
+        pytest.skip("Noto CJK font not installed")
+    from PIL import Image, ImageDraw, ImageFont
+
+    im = Image.new("RGB", (360, 400), (240, 236, 228))
+    ImageDraw.Draw(im).text((20, 20), "龍", font=ImageFont.truetype(str(font_path), 300), fill=(20, 20, 20))
+    res = extract_strokes(cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR), "ink")
+    assert 8 <= len(res.strokes) <= 30
+    assert _coverage(res) > 0.95

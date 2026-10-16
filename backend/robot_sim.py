@@ -70,6 +70,9 @@ class DrawingSim:
         self.set_camera(camera)
         self.ink: list[list[np.ndarray]] = []  # polylines of 3-D points
         self.plan: list[np.ndarray] = []
+        self._paper_gen = 0  # bumped whenever ink/plan are replaced (invalidates render caches)
+        self._plan_cache = (None, None)
+        self._ink_cache = None
 
     # ------------------------------------------------------------------ scene
     def _build_scene(self):
@@ -215,6 +218,56 @@ class DrawingSim:
         b = self.project(c + [[0.0, 0.002, 0.0]])[0]
         return int(np.clip(round(np.linalg.norm(b - a)), 2, 6))
 
+    def clear_paper(self, plan=None):
+        """Remove all ink and optionally show a new planned path."""
+        self.ink = []
+        self.plan = plan or []
+        self._paper_gen += 1
+
+    def _draw_polyline(self, layer, pl, scale, thick):
+        px = np.round(self.project(np.asarray(pl)) * scale).astype(np.int32)
+        if len(px) == 1:
+            cv2.circle(layer, tuple(px[0]), max(1, thick * scale // 2), 255, -1)
+        elif len(px) > 1:
+            cv2.polylines(layer, [px], False, 255, thick * scale, cv2.LINE_8)
+
+    def _plan_alpha(self, scale):
+        key = (self.camera, self._paper_gen)
+        if self._plan_cache[0] != key:
+            layer = np.zeros((self.height * scale, self.width * scale), np.uint8)
+            for pl in self.plan:
+                self._draw_polyline(layer, pl, scale, 1)
+            alpha = cv2.resize(layer, (self.width, self.height), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
+            self._plan_cache = (key, alpha)
+        return self._plan_cache[1]
+
+    def _ink_alpha(self, scale, thick):
+        """Ink layer, updated incrementally: only points added since the last
+        frame are rasterised (drawings can have thousands of polylines)."""
+        key = (self.camera, self._paper_gen, thick)
+        c = self._ink_cache
+        if c is None or c["key"] != key:
+            c = self._ink_cache = {
+                "key": key,
+                "layer": np.zeros((self.height * scale, self.width * scale), np.uint8),
+                "counts": [],
+                "alpha": None,
+            }
+        counts, changed = c["counts"], False
+        for i in range(max(0, len(counts) - 1), len(self.ink)):
+            pl = self.ink[i]
+            done = counts[i] if i < len(counts) else 0
+            if len(pl) > done:
+                self._draw_polyline(c["layer"], pl[max(0, done - 1) :], scale, thick)
+                changed = True
+            if i < len(counts):
+                counts[i] = len(pl)
+            else:
+                counts.append(len(pl))
+        if changed or c["alpha"] is None:
+            c["alpha"] = cv2.resize(c["layer"], (self.width, self.height), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
+        return c["alpha"]
+
     def render(self) -> np.ndarray:
         """Render the scene (BGR uint8) with ink composited onto the paper."""
         w, h = self.width, self.height
@@ -233,23 +286,11 @@ class DrawingSim:
         on_paper = (seg == self.paper).astype(np.float32)
 
         scale = 4  # supersample the ink layer for smooth lines
-        width_px = self._ink_px_width()
         layers = []
-        for polylines, color, thick in ((self.plan, PLAN_COLOR, 1), (self.ink, INK_COLOR, width_px)):
-            if not polylines:
-                continue
-            layer = np.zeros((h * scale, w * scale), np.uint8)
-            for pl in polylines:
-                pl = np.asarray(pl)
-                if len(pl) == 0:
-                    continue
-                px = np.round(self.project(pl) * scale).astype(np.int32)
-                if len(px) == 1:
-                    cv2.circle(layer, tuple(px[0]), thick * scale // 2, 255, -1)
-                else:
-                    cv2.polylines(layer, [px], False, 255, thick * scale, cv2.LINE_8)
-            alpha = cv2.resize(layer, (w, h), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
-            layers.append((alpha * on_paper, color))
+        if self.plan:
+            layers.append((self._plan_alpha(scale) * on_paper, PLAN_COLOR))
+        if self.ink:
+            layers.append((self._ink_alpha(scale, self._ink_px_width()) * on_paper, INK_COLOR))
         if layers:
             f = frame.astype(np.float32)
             for alpha, color in layers:
@@ -285,8 +326,7 @@ class DrawingSim:
         cid = self.cid
         cfg = self.cfg
         with self._lock:
-            self.ink = []
-            self.plan = self.plan_from(traj) if show_plan else []
+            self.clear_paper(self.plan_from(traj) if show_plan else None)
         # Offline mode renders every `steps_per_frame` steps. Real-time mode
         # renders whenever the wall clock reaches the next frame slot; if the
         # CPU cannot keep up, frames are dropped (not the motion) so playback

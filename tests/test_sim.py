@@ -73,3 +73,14 @@ def test_stop_event(sim):
 
     stats = sim.run(tr, on_frame, speed=4, realtime=False, stop_event=ev)
     assert stats["stopped"]
+
+
+def test_incremental_ink_cache_matches_full_redraw(sim):
+    sim.set_camera("top")
+    tr = build_trajectory([[(0.1, 0.5), (0.9, 0.5)], [(0.5, 0.1), (0.5, 0.9)]], sim.cfg)
+    sim.run(tr, lambda f, i: None, speed=8, realtime=False)  # renders incrementally along the way
+    cached = sim.render()
+    sim._ink_cache = None  # force a full redraw from scratch
+    assert np.abs(sim.render().astype(int) - cached.astype(int)).max() <= 1
+    sim.clear_paper()
+    assert not sim.ink and sim.render().shape == cached.shape

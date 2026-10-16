@@ -17,7 +17,8 @@ class TrajectoryConfig:
     paper_center: tuple[float, float] = (0.62, 0.0)  # world XY of the paper centre (m)
     paper_z: float = 0.62  # height of the paper / table top (m); the robot base sits here too
     char_size: float = 0.20  # side of the square the character is fitted into (m)
-    lift: float = 0.04  # pen-up clearance above the paper (m)
+    lift: float = 0.04  # max pen-up clearance above the paper (m)
+    min_lift: float = 0.006  # clearance for very short hops between neighbouring strokes (m)
     press: float = 0.0015  # how far below the surface the pen is commanded when down (m)
     draw_speed: float = 0.10  # m/s while drawing
     travel_speed: float = 0.25  # m/s while the pen is up
@@ -90,6 +91,7 @@ def build_trajectory(strokes, cfg: TrajectoryConfig | None = None, home=None) ->
     sid = []
 
     cur = np.array(home if home is not None else [cfg.paper_center[0] - 0.1, cfg.paper_center[1], z_up + 0.06], float)
+    cur[2] = max(cur[2], z_up)
     pts.append(cur[None]); down.append([False]); sid.append([-1])
 
     def push(arr, is_down, k):
@@ -101,14 +103,23 @@ def build_trajectory(strokes, cfg: TrajectoryConfig | None = None, home=None) ->
             cur = arr[-1]
 
     for k, xy in enumerate(world):
-        start = np.array([xy[0, 0], xy[0, 1], z_up])
+        # Travel at the current (lifted) height, then lower the pen.
+        start = np.array([xy[0, 0], xy[0, 1], cur[2]])
         push(_ease(cur, start, cfg.travel_speed, cfg.dt), False, -1)
         push(_ease(cur, np.array([xy[0, 0], xy[0, 1], z_dn]), cfg.z_speed, cfg.dt), False, -1)
         # Constant-speed drawing along the arc-length-resampled stroke.
         dense = resample_polyline(xy, cfg.draw_speed * cfg.dt)
         draw = np.column_stack([dense[1:], np.full(len(dense) - 1, z_dn)])
         push(draw, True, k)
-        push(_ease(cur, np.array([cur[0], cur[1], z_up]), cfg.z_speed, cfg.dt), False, -1)
+        # Lift only as much as the next hop needs: sketches have hundreds of
+        # short hops between neighbouring strokes (hatching), and a full lift
+        # for each would dominate the drawing time.
+        if k + 1 < len(world):
+            hop = float(np.linalg.norm(world[k + 1][0] - cur[:2]))
+            z_lift = cfg.paper_z + float(np.clip(0.5 * hop, cfg.min_lift, cfg.lift))
+        else:
+            z_lift = z_up
+        push(_ease(cur, np.array([cur[0], cur[1], z_lift]), cfg.z_speed, cfg.dt), False, -1)
 
     end = np.array([cfg.paper_center[0] - 0.1, cfg.paper_center[1], z_up + 0.06])
     push(_ease(cur, end, cfg.travel_speed, cfg.dt), False, -1)

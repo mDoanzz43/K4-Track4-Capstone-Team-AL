@@ -59,3 +59,28 @@ def test_websocket_draw_session():
 
         ws.send_json({"type": "start", "strokes": "nope"})
         assert ws.receive_json()["type"] == "error"
+
+
+def test_extract_ink_and_sketch_modes(make_text, make_portrait):
+    r = client.post("/api/extract", json={"image": _data_url(make_text("B")), "mode": "ink"})
+    assert r.status_code == 200, r.text
+    assert r.json()["stats"]["est_seconds"] > 1
+    r = client.post(
+        "/api/extract",
+        json={"image": _data_url(make_portrait()), "mode": "sketch", "detail": 0.4, "hatching": True},
+    )
+    assert r.status_code == 200, r.text
+    st = r.json()["stats"]
+    assert st["method"] == "sketch" and st["hatch_strokes"] > 0
+    bad = client.post("/api/extract", json={"image": _data_url(make_portrait()), "mode": "sketch", "detail": 3})
+    assert bad.status_code == 422
+
+
+def test_websocket_accepts_large_sketch(make_portrait):
+    strokes = client.post("/api/extract", json={"image": _data_url(make_portrait()), "mode": "sketch"}).json()["strokes"]
+    assert len(strokes) > 60  # above the old limit
+    with client.websocket_connect("/ws/draw") as ws:
+        assert ws.receive_json()["type"] == "ready"
+        ws.receive_bytes()
+        ws.send_json({"type": "reset", "strokes": strokes})
+        assert ws.receive_bytes()[:2] == b"\xff\xd8"  # preview frame with the plan, no error

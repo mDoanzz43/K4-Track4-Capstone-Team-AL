@@ -15,8 +15,8 @@ document.querySelectorAll(".tab").forEach((btn) =>
   btn.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
     state.tab = btn.dataset.tab;
-    $("tab-draw").classList.toggle("hidden", state.tab !== "draw");
-    $("tab-cam").classList.toggle("hidden", state.tab !== "cam");
+    for (const t of ["draw", "cam", "upload"]) $("tab-" + t).classList.toggle("hidden", state.tab !== t);
+    updateMethodRow();
   })
 );
 
@@ -90,6 +90,58 @@ $("cam-start").onclick = async () => {
 $("air-undo").onclick = () => { air.pen.undo(); air.draw(); };
 $("air-clear").onclick = () => { air.pen.clear(); air.draw(); };
 
+/* --------------------------------------------------------- image upload */
+state.upload = null; // data URL of the uploaded image (downscaled)
+
+function uploadKind() { return document.querySelector("input[name=kind]:checked").value; }
+function updateMethodRow() {
+  const sketch = state.tab === "upload" && uploadKind() === "sketch";
+  $("method-row").querySelector("label").classList.toggle("hidden", sketch);
+  $("sketch-opts").classList.toggle("hidden", uploadKind() !== "sketch");
+  $("kind-hint-ink").classList.toggle("hidden", uploadKind() !== "ink");
+}
+document.querySelectorAll("input[name=kind]").forEach((r) => (r.onchange = updateMethodRow));
+
+function loadUpload(file) {
+  if (!file || !file.type.startsWith("image/")) {
+    setInfo("extract-info", "Hãy chọn một file ảnh (PNG, JPG, WEBP…).", "err");
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    // Downscale big photos in the browser: faster upload, same result.
+    const s = Math.min(1, 1600 / Math.max(img.width, img.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * s);
+    c.height = Math.round(img.height * s);
+    const g = c.getContext("2d");
+    g.fillStyle = "#fff"; // transparent PNGs -> white paper
+    g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(img, 0, 0, c.width, c.height);
+    state.upload = c.toDataURL("image/jpeg", 0.92);
+    $("upload-preview").src = state.upload;
+    $("upload-preview").classList.remove("hidden");
+    $("drop-hint").classList.add("hidden");
+    setInfo("extract-info", `Đã tải ${file.name || "ảnh"} (${img.width}×${img.height}). Bấm 'Trích nét →'.`);
+    URL.revokeObjectURL(img.src);
+  };
+  img.onerror = () => setInfo("extract-info", "Không đọc được ảnh này.", "err");
+  img.src = URL.createObjectURL(file);
+}
+$("file").onchange = (e) => { loadUpload(e.target.files[0]); e.target.value = ""; };
+const drop = $("drop");
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, () => drop.classList.remove("over")));
+drop.addEventListener("drop", (e) => { e.preventDefault(); loadUpload(e.dataTransfer.files[0]); });
+drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
+window.addEventListener("paste", (e) => {
+  const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
+  if (!item) return;
+  document.querySelector('.tab[data-tab="upload"]').click();
+  loadUpload(item.getAsFile());
+});
+updateMethodRow();
+
 /* ----------------------------------------------------------- extraction */
 function setInfo(id, text, cls = "") {
   const el = $(id);
@@ -98,8 +150,20 @@ function setInfo(id, text, cls = "") {
 }
 
 $("extract").onclick = async () => {
-  let image, mode;
-  if (state.tab === "draw") {
+  let image, mode, extra = {};
+  if (state.tab === "upload") {
+    if (!state.upload) return setInfo("extract-info", "Hãy tải một ảnh lên trước.", "err");
+    image = state.upload;
+    mode = uploadKind();
+    if (mode === "sketch") {
+      extra = {
+        detail: +$("detail").value,
+        face_crop: $("face-crop").checked,
+        remove_bg: $("remove-bg").checked,
+        hatching: $("hatching").checked,
+      };
+    }
+  } else if (state.tab === "draw") {
     if (!padStrokes.length) return setInfo("extract-info", "Hãy vẽ một ký tự trước.", "err");
     image = pad.toDataURL("image/png");
     mode = "canvas";
@@ -114,7 +178,7 @@ $("extract").onclick = async () => {
     const res = await fetch("/api/extract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image, mode, method: $("method").value }),
+      body: JSON.stringify({ image, mode, method: $("method").value, ...extra }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || res.statusText);
@@ -123,7 +187,14 @@ $("extract").onclick = async () => {
     $("img-skeleton").src = data.images.skeleton;
     $("img-strokes").src = data.images.strokes;
     const s = data.stats;
-    setInfo("extract-info", `${s.num_strokes} nét, ${s.num_points} điểm điều khiển · ${s.ms} ms`, "ok");
+    const mins = s.est_seconds >= 90 ? `${(s.est_seconds / 60).toFixed(1)} phút` : `${s.est_seconds} s`;
+    let msg = `${s.num_strokes} nét, ${s.num_points} điểm điều khiển · ${s.ms} ms\nRobot vẽ ước tính ${mins} (thời gian mô phỏng ở tốc độ 1×)`;
+    if (s.method === "sketch") {
+      msg += `\n${s.line_strokes} nét đường, ${s.hatch_strokes} nét gạch` +
+        (s.face_found ? " · đã nhận diện khuôn mặt" : " · không thấy khuôn mặt, dùng cả ảnh") +
+        (s.background_removed ? " · đã tách nền" : "");
+    }
+    setInfo("extract-info", msg, "ok");
     state.inkPolys = [];
     drawTrace();
     send({ type: "reset", strokes: $("plan").checked ? state.strokes : null });
@@ -216,6 +287,7 @@ function connect() {
       }
       case "done": {
         state.running = false;
+        if (!msg.stats.stopped) $("bar").style.width = "100%";
         const s = msg.stats;
         setInfo(
           "robot-info",

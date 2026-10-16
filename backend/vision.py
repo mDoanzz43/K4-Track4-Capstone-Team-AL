@@ -91,11 +91,20 @@ def _resize_max(img: np.ndarray, max_side: int) -> np.ndarray:
 
 
 def binarize(img: np.ndarray, mode: str) -> np.ndarray:
-    """Return a uint8 mask (255 = ink) for dark ink on a light background."""
+    """Return a uint8 mask (255 = ink) for dark ink on a light background.
+
+    In "ink" mode (uploaded images of text / line art) the polarity is detected
+    automatically, so light-on-dark images (chalk, white calligraphy on black)
+    work too.
+    """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     if mode == "canvas":
         _, bw = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY_INV)
         return bw
+    if mode == "ink":
+        _, probe = cv2.threshold(cv2.GaussianBlur(gray, (5, 5), 0), 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        if probe.mean() > 127:  # "ink" covers most of the image -> it is the background
+            gray = 255 - gray
 
     # Photo: flatten uneven lighting by dividing by an estimate of the paper.
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -126,7 +135,7 @@ def isolate_character(bw: np.ndarray, mode: str) -> tuple[np.ndarray, tuple[int,
     if n <= 1:
         raise NoCharacterFound("No ink found in the image")
 
-    min_area = max(4, int(0.00015 * h * w)) if mode == "photo" else 4
+    min_area = max(4, int(0.00015 * h * w)) if mode != "canvas" else 4
     cand = []
     for i in range(1, n):
         x, y, cw, ch, area = stats[i]
@@ -134,13 +143,13 @@ def isolate_character(bw: np.ndarray, mode: str) -> tuple[np.ndarray, tuple[int,
             continue
         touches = x <= 1 or y <= 1 or x + cw >= w - 1 or y + ch >= h - 1
         # In photos, huge blobs touching the border are paper edges / shadows.
-        if mode == "photo" and touches and (cw > 0.6 * w or ch > 0.6 * h):
+        if mode != "canvas" and touches and (cw > 0.6 * w or ch > 0.6 * h):
             continue
         cand.append(i)
     if not cand:
         raise NoCharacterFound("No character-like region found")
 
-    if mode == "canvas":
+    if mode in ("canvas", "ink"):
         keep = cand
     else:
         # Main component: largest area, with a mild preference for the image centre.
@@ -176,11 +185,11 @@ def isolate_character(bw: np.ndarray, mode: str) -> tuple[np.ndarray, tuple[int,
     return mask, (int(x0), int(y0), int(x1 - x0 + 1), int(y1 - y0 + 1))
 
 
-def crop_and_scale(mask: np.ndarray, bbox) -> tuple[np.ndarray, float]:
-    """Crop to bbox and rescale so the longest side equals WORK_SIZE (+margin)."""
+def crop_and_scale(mask: np.ndarray, bbox, work_size: int = WORK_SIZE) -> tuple[np.ndarray, float]:
+    """Crop to bbox and rescale so the longest side equals `work_size` (+margin)."""
     x, y, w, h = bbox
     crop = mask[y : y + h, x : x + w]
-    s = WORK_SIZE / max(w, h)
+    s = work_size / max(w, h)
     nw, nh = max(1, int(round(w * s))), max(1, int(round(h * s)))
     crop = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_LINEAR if s > 1 else cv2.INTER_AREA)
     _, crop = cv2.threshold(crop, 127, 255, cv2.THRESH_BINARY)
@@ -568,68 +577,71 @@ def smooth_and_simplify(stroke, eps: float = 0.8, window: int = 5):
 
 
 def order_strokes(strokes):
-    """Greedy nearest-neighbour ordering (allowing reversal) from the top-left."""
+    """Greedy nearest-neighbour ordering (allowing reversal) from the top-left.
+
+    Vectorised over the remaining strokes, so it stays fast for the hundreds
+    of strokes produced by sketches / hatching.
+    """
     remaining = [np.asarray(s, float) for s in strokes]
+    if not remaining:
+        return []
+    starts = np.array([s[0] for s in remaining])
+    ends = np.array([s[-1] for s in remaining])
+    closed = np.linalg.norm(starts - ends, axis=1) < 1e-6
+    alive = np.ones(len(remaining), bool)
     ordered = []
     pos = np.array([0.0, 0.0])
-    while remaining:
-        best, best_d, best_rev = 0, float("inf"), False
-        for i, s in enumerate(remaining):
-            closed = np.linalg.norm(s[0] - s[-1]) < 1e-6
-            d0 = np.linalg.norm(s[0] - pos)
-            d1 = np.inf if closed else np.linalg.norm(s[-1] - pos)
-            if d0 < best_d:
-                best, best_d, best_rev = i, d0, False
-            if d1 < best_d:
-                best, best_d, best_rev = i, d1, True
-        s = remaining.pop(best)
-        if best_rev:
-            s = s[::-1]
+    for _ in range(len(remaining)):
+        d0 = np.linalg.norm(starts - pos, axis=1)
+        d1 = np.where(closed, np.inf, np.linalg.norm(ends - pos, axis=1))
+        d0[~alive] = np.inf
+        d1[~alive] = np.inf
+        i0, i1 = int(np.argmin(d0)), int(np.argmin(d1))
+        if d1[i1] < d0[i0]:
+            i, s = i1, remaining[i1][::-1]
+        else:
+            i, s = i0, remaining[i0]
+        alive[i] = False
         ordered.append(s)
         pos = s[-1]
     return ordered
 
 
-def extract_strokes(img: np.ndarray, mode: str = "canvas", method: str = "skeleton") -> ExtractionResult:
-    """Full pipeline: BGR image -> ordered, normalised pen strokes."""
-    if mode not in ("canvas", "photo"):
-        raise ValueError("mode must be 'canvas' or 'photo'")
-    img = _resize_max(img, 800)
-    bw = binarize(img, mode)
-    mask, bbox = isolate_character(bw, mode)
-    crop, _ = crop_and_scale(mask, bbox)
-
+def strokes_from_mask(mask: np.ndarray, method: str = "skeleton", spur_len: float = 16.0):
+    """Binary ink mask (uint8, 255 = ink) -> raw strokes in (y, x) pixel coords
+    plus the skeleton / contour image used to obtain them."""
     if method == "outline":
-        contours, _ = cv2.findContours(crop, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+        contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
         raw = []
         for c in contours:
             if cv2.arcLength(c, True) < 15:
                 continue
             pts = c.reshape(-1, 2)[:, ::-1].astype(float)  # (y, x)
             raw.append(np.vstack([pts, pts[:1]]))
-        sk = np.zeros(crop.shape, bool)
-        for c in contours:
-            cv2.drawContours(sk.view(np.uint8), [c], -1, 1, 1)
-    else:
-        sk = skeletonize(crop)
-        sk = prune_spurs(sk, min_len=0.08 * WORK_SIZE)
-        node_pos, edges = skeleton_graph(sk)
-        degree: dict = {}
-        for a, b, _ in edges:
-            degree[a] = degree.get(a, 0) + 1
-            degree[b] = degree.get(b, 0) + 1
-        free_ends = [node_pos[n] for n, d in degree.items() if d == 1]
-        raw = extend_endpoints(chain_strokes(node_pos, edges), crop, free_ends)
+        sk = np.zeros(mask.shape, np.uint8)
+        cv2.drawContours(sk, contours, -1, 1, 1)
+        return raw, sk.astype(bool)
+    sk = skeletonize(mask)
+    sk = prune_spurs(sk, min_len=spur_len)
+    node_pos, edges = skeleton_graph(sk)
+    degree: dict = {}
+    for a, b, _ in edges:
+        degree[a] = degree.get(a, 0) + 1
+        degree[b] = degree.get(b, 0) + 1
+    free_ends = [node_pos[n] for n, d in degree.items() if d == 1]
+    return extend_endpoints(chain_strokes(node_pos, edges), mask, free_ends), sk
 
-    # (y, x) -> (x, y), smooth, drop tiny fragments
+
+def finalize_strokes(raw, *, binary, skeleton, bbox, method, min_len: float = 3.0, eps: float = 0.8, extra_stats=None):
+    """Raw (y, x) pixel strokes -> smoothed, simplified, ordered, normalised result."""
     strokes_px = []
     for s in raw:
         xy = np.asarray(s, float)[:, ::-1]
-        if _polyline_length(xy) < 3 and len(raw) > 1:
+        if _polyline_length(xy) < min_len and len(raw) > 1:
             continue
-        strokes_px.append(smooth_and_simplify(xy))
+        strokes_px.append(smooth_and_simplify(xy, eps=eps))
     if not strokes_px:
-        raise NoCharacterFound("Character too small to extract strokes")
+        raise NoCharacterFound("Too little ink to extract strokes")
     strokes_px = order_strokes(strokes_px)
 
     # Normalise to the unit box, centred, aspect ratio kept.
@@ -640,29 +652,54 @@ def extract_strokes(img: np.ndarray, mode: str = "canvas", method: str = "skelet
     strokes = [[(float(x), float(y)) for x, y in ((s - mn) / span + off)] for s in strokes_px]
 
     total_len = sum(_polyline_length(s) for s in strokes)
+    stats = {
+        "num_strokes": len(strokes),
+        "num_points": int(sum(len(s) for s in strokes)),
+        "ink_length": round(total_len, 3),
+        "method": method,
+    }
+    stats.update(extra_stats or {})
     return ExtractionResult(
         strokes=strokes,
         strokes_px=strokes_px,
-        binary=crop,
-        skeleton=(sk.astype(np.uint8) * 255),
+        binary=binary,
+        skeleton=(skeleton.astype(np.uint8) * 255),
         bbox=bbox,
-        stats={
-            "num_strokes": len(strokes),
-            "num_points": int(sum(len(s) for s in strokes)),
-            "ink_length": round(total_len, 3),
-            "method": method,
-        },
+        stats=stats,
     )
 
 
+MODES = ("canvas", "photo", "ink")
+
+
+def extract_strokes(img: np.ndarray, mode: str = "canvas", method: str = "skeleton") -> ExtractionResult:
+    """Full pipeline: BGR image -> ordered, normalised pen strokes.
+
+    mode: "canvas" (drawing pad), "photo" (one handwritten character in a
+    photo) or "ink" (uploaded image of text / calligraphy / line art: every
+    ink component is kept and a finer working resolution is used).
+    """
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
+    img = _resize_max(img, 1000 if mode == "ink" else 800)
+    bw = binarize(img, mode)
+    mask, bbox = isolate_character(bw, mode)
+    work = 320 if mode == "ink" else WORK_SIZE  # complex glyphs (Hán tự) need more pixels
+    crop, _ = crop_and_scale(mask, bbox, work)
+    raw, sk = strokes_from_mask(crop, method, spur_len=0.08 * WORK_SIZE)
+    return finalize_strokes(raw, binary=crop, skeleton=sk, bbox=bbox, method=method)
+
+
 def render_strokes(strokes, size: int = 256, margin: int = 16) -> np.ndarray:
-    """Debug rendering of normalised strokes (colour-coded, with start dots)."""
+    """Debug rendering of normalised strokes (colour = order; start dots when few)."""
     img = np.full((size, size, 3), 255, np.uint8)
     sc = size - 2 * margin
+    many = len(strokes) > 40
     for i, s in enumerate(strokes):
-        hue = int(180 * i / max(1, len(strokes)))
+        hue = int(150 * i / max(1, len(strokes)))
         col = cv2.cvtColor(np.uint8([[[hue, 220, 200]]]), cv2.COLOR_HSV2BGR)[0, 0].tolist()
         pts = (np.asarray(s) * sc + margin).astype(np.int32)
-        cv2.polylines(img, [pts], False, col, 2, cv2.LINE_AA)
-        cv2.circle(img, tuple(int(v) for v in pts[0]), 4, col, -1, cv2.LINE_AA)
+        cv2.polylines(img, [pts], False, col, 1 if many else 2, cv2.LINE_AA)
+        if not many:
+            cv2.circle(img, tuple(int(v) for v in pts[0]), 4, col, -1, cv2.LINE_AA)
     return img

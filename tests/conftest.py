@@ -39,3 +39,27 @@ def make_text():
 @pytest.fixture
 def make_photo():
     return photo_image
+
+
+def portrait_like(seed: int = 0) -> np.ndarray:
+    """Synthetic 'portrait': light background, skin-toned head with eyes,
+    mouth and hair, and a dark jacket (gives line art + dark tone regions)."""
+    rng = np.random.default_rng(seed)
+    img = np.full((480, 400, 3), (205, 215, 220), np.uint8)
+    cv2.ellipse(img, (200, 170), (85, 110), 0, 0, 360, (150, 180, 215), -1)  # face
+    cv2.ellipse(img, (200, 95), (95, 55), 0, 180, 360, (30, 30, 40), -1)  # hair
+    for x in (165, 235):
+        cv2.ellipse(img, (x, 160), (16, 8), 0, 0, 360, (250, 250, 250), -1)
+        cv2.circle(img, (x, 160), 6, (40, 30, 20), -1)
+        cv2.line(img, (x - 20, 138), (x + 20, 136), (35, 35, 35), 5)  # eyebrows
+    cv2.line(img, (200, 170), (192, 215), (110, 130, 170), 3)  # nose
+    cv2.ellipse(img, (200, 240), (32, 12), 0, 0, 180, (60, 60, 140), 4)  # mouth
+    pts = np.array([[60, 480], [110, 330], [290, 330], [340, 480]], np.int32)
+    cv2.fillPoly(img, [pts], (45, 40, 45))  # jacket
+    img = np.clip(img + rng.normal(0, 3, img.shape), 0, 255).astype(np.uint8)
+    return img
+
+
+@pytest.fixture
+def make_portrait():
+    return portrait_like
